@@ -16,13 +16,23 @@ logger = logging.getLogger("jarvis.agent.router")
 # Quick keyword-based classification (faster than LLM for obvious intents)
 KEYWORD_PATTERNS: dict[str, list[str]] = {
     "browser": [
-        "search chrome", "browse", "search for", "search the web",
-        "google", "search google", "open url", "open website", "search bing",
-        "search duckduckgo", "web search", "look up online", "search online",
-        "youtube.com", "open youtube", ".com", ".org", ".net",
-        "http://", "https://", "go to", "navigate to", "first result",
-        "summarize this page", "summarize this website", "summarize page",
+        "search chrome for", "search google for", "search the web for",
+        "find latest", "google", "search google", "search chrome", "browse",
+        "search for", "search the web", "search bing", "search duckduckgo",
+        "web search", "look up online", "search online",
+        "open youtube.com", "open google.com", "youtube.com", "google.com",
+        "open first result", "open second result", "open third result",
+        "open the first result", "open the second result", "open the third result",
+        "open result number 3", "first result",
+        "read this page", "extract text from this page", "summarize this page",
+        "what is on this page", "summarize this website", "summarize page",
         "summarize this",
+        "open browser", "open chrome", "please open chrome", "start chrome",
+        "open google", "launch browser", "launch chrome", "start browser",
+        "http://", "https://", "go to", "navigate to",
+        "login", "log in", "sign in", "submit form", "enter password",
+        "make payment", "pay ", "send message", "post comment", "upload file",
+        "download executable", "approve financial transaction", "approve transaction"
     ],
     "filesystem": [
         "create folder", "create a folder", "make folder", "make a folder",
@@ -47,7 +57,7 @@ KEYWORD_PATTERNS: dict[str, list[str]] = {
         "open downloads", "open desktop", "open documents",
         "open the notepad", "please open notepad", "launch notepad", "start notepad", "run notepad",
         "can you open the notepad", "please open calculator", "start calculator",
-        "open chrome", "please open chrome", "start chrome", "please open downloads", "start downloads",
+        "please open downloads", "start downloads",
         "please open desktop", "start desktop"
     ],
     "system_info": [

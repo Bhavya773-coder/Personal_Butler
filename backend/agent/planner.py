@@ -273,18 +273,120 @@ class TaskPlanner:
         elif intent == "browser":
             action_id = await audit_log.log_action(self.session_id, "tool", "browser_action", details={"message": message})
             try:
-                # 0. Open Browser/Chrome
-                if "open chrome" in msg_lower or "open browser" in msg_lower:
-                    await self._emit("tool_started", {"tool": "open_application", "message": "Opening Chrome..."})
-                    result = await pc_control.open_application("chrome")
-                    await self._emit("tool_done", {"tool": "open_application", "result": str(result)})
-                    res_str = result.get("message", "Opened Chrome.")
+                # Check for protected browser actions
+                from tools.browser import is_protected_command
+                if is_protected_command(message):
+                    blocked_msg = "This action requires explicit confirmation and is not automated in this version."
+                    await audit_log.update_action(action_id, status="failed", result=blocked_msg)
+                    return blocked_msg
+
+                # 0. Open Browser/Chrome/Google
+                is_open_browser_cmd = (
+                    "open chrome" in msg_lower or 
+                    "open browser" in msg_lower or 
+                    msg_lower == "open google" or 
+                    "please open chrome" in msg_lower or 
+                    "start chrome" in msg_lower or
+                    "launch browser" in msg_lower
+                )
+                if is_open_browser_cmd:
+                    await self._emit("tool_started", {"tool": "open_browser", "message": "Opening browser..."})
+                    result = await browser.launch_browser()
+                    await self._emit("tool_done", {"tool": "open_browser", "result": str(result)})
+                    
+                    res_str = result.get("message", "Opened browser.")
                     status = "completed" if result.get("success") else "failed"
-                    await audit_log.update_action(action_id, status=status, result=res_str)
+                    
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "url": result.get("url"),
+                        "title": result.get("title"),
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
                     return res_str
 
-                # 1. Search Google/Chrome
-                elif "search" in msg_lower:
+                # 1. Follow-up result navigation: open first/second/third result
+                elif any(phrase in msg_lower for phrase in ["first result", "second result", "third result", "result number 3"]):
+                    index = 0
+                    if "second" in msg_lower:
+                        index = 1
+                    elif "third" in msg_lower or "number 3" in msg_lower:
+                        index = 2
+
+                    await self._emit("tool_started", {"tool": "open_first_result", "message": f"Opening result at index {index}..."})
+                    result = await browser.open_first_result(index)
+                    await self._emit("tool_done", {"tool": "open_first_result", "result": str(result)})
+
+                    res_str = result.get("message", "Opened result.")
+                    status = "completed" if result.get("success") else "failed"
+
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "url": result.get("url"),
+                        "title": result.get("title"),
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
+
+                # 2. Extract visible page text
+                elif any(phrase in msg_lower for phrase in ["read this page", "extract text from this page", "what is on this page"]):
+                    await self._emit("tool_started", {"tool": "get_page_content", "message": "Extracting page content..."})
+                    result = await browser.get_page_content()
+                    await self._emit("tool_done", {"tool": "get_page_content", "result": str(result)})
+
+                    res_str = result.get("message", "Extracted page content.")
+                    if result.get("success") and result.get("text_preview"):
+                        res_str = f"Extracted text from '{result.get('title')}':\n\n{result.get('text_preview')}"
+                    
+                    status = "completed" if result.get("success") else "failed"
+
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "url": result.get("url"),
+                        "title": result.get("title"),
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
+
+                # 3. Summarize page
+                elif "summarize" in msg_lower:
+                    await self._emit("tool_started", {"tool": "summarize_page", "message": "Summarizing webpage content..."})
+                    result = await browser.summarize_page()
+                    await self._emit("tool_done", {"tool": "summarize_page", "result": "Summary complete."})
+
+                    res_str = result.get("message", "Summary failed.")
+                    status = "completed" if result.get("success") else "failed"
+
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "url": result.get("url"),
+                        "title": result.get("title"),
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
+
+                # 4. Search Google/Chrome
+                elif "search" in msg_lower or "find latest" in msg_lower or msg_lower.startswith("google "):
                     query = self._extract_search_query(message)
                     if not query:
                         res_str = "What would you like me to search for?"
@@ -299,101 +401,73 @@ class TaskPlanner:
 
                     await self._emit("tool_started", {"tool": "web_search", "message": f"Searching for: {query}"})
                     result = await search.web_search(query, engine=engine)
-                    
+
                     if self._interrupted:
                         await audit_log.update_action(action_id, status="interrupted", result="Interrupted")
                         return "Stopped."
 
-                    if "error" in result:
-                        await self._emit("tool_done", {"tool": "web_search", "result": result["error"]})
-                        await audit_log.update_action(action_id, status="failed", result=result["error"])
-                        return result["error"]
+                    await self._emit("tool_done", {"tool": "web_search", "result": "Search done."})
 
-                    self.last_search_results = result.get("results", [])
-                    summary_res = result.get("summary", "Search complete.")
-                    await self._emit("tool_done", {"tool": "web_search", "result": summary_res})
-                    
-                    response_str = f"Opened browser search. Here is what I found:\n{summary_res}"
-                    await audit_log.update_action(action_id, status="completed", result=response_str)
-                    return response_str
+                    res_str = result.get("message", "Search failed.")
+                    status = "completed" if result.get("success") else "failed"
 
-                # 2. Open first result
-                elif "first result" in msg_lower or "open first result" in msg_lower or "open the first result" in msg_lower:
-                    if not self.last_search_results:
-                        res_str = "I don't have any search results cached. Please search for something first."
-                        await audit_log.update_action(action_id, status="failed", result=res_str)
-                        return res_str
+                    if result.get("success"):
+                        self.last_search_results = result.get("results", [])
 
-                    first_url = self.last_search_results[0]["url"]
-                    await self._emit("tool_started", {"tool": "open_url", "message": f"Opening first result: {first_url}"})
-                    result = await browser.open_url(first_url)
-                    
-                    if "error" in result:
-                        await self._emit("tool_done", {"tool": "open_url", "result": result["error"]})
-                        await audit_log.update_action(action_id, status="failed", result=result["error"])
-                        return result["error"]
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "results": [r.get("title") for r in result.get("results", [])],
+                        "url": result.get("url"),
+                        "title": result.get("title"),
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
 
-                    await self._emit("tool_done", {"tool": "open_url", "result": f"Opened {first_url}"})
-                    response_str = f"Opened browser search. Opened first result: {first_url}"
-                    await audit_log.update_action(action_id, status="completed", result=response_str)
-                    return response_str
-
-                # 3. Summarize page
-                elif "summarize" in msg_lower:
-                    await self._emit("tool_started", {"tool": "get_page_content", "message": "Extracting page content to summarize..."})
-                    page_info = await browser.get_page_content()
-                    
-                    if "error" in page_info:
-                        await self._emit("tool_done", {"tool": "get_page_content", "result": page_info["error"]})
-                        await audit_log.update_action(action_id, status="failed", result=page_info["error"])
-                        return page_info["error"]
-
-                    await self._emit("tool_done", {"tool": "get_page_content", "result": "Content extracted."})
-                    
-                    content_text = page_info.get("content", "").strip()
-                    title = page_info.get("title", "this page")
-                    if not content_text:
-                        res_str = f"The page '{title}' has no readable text content to summarize."
-                        await audit_log.update_action(action_id, status="completed", result=res_str)
-                        return res_str
-
-                    status = await check_ollama_status()
-                    if status["running"] and status["model_available"]:
-                        await self._emit("tool_started", {"tool": "summarize_page", "message": "Summarizing webpage content..."})
-                        summary = await self._summarize(f"Summarize the webpage: '{title}'", content_text)
-                        await self._emit("tool_done", {"tool": "summarize_page", "result": "Summary complete."})
-                        response_str = f"Summary of {title}:\n{summary}"
-                    else:
-                        preview = content_text[:300] + "..." if len(content_text) > 300 else content_text
-                        response_str = f"Ollama is unavailable. Here is a preview of the page '{title}':\n\n{preview}"
-                    
-                    await audit_log.update_action(action_id, status="completed", result=response_str)
-                    return response_str
-
-                # 4. Open website URL
+                # 5. Open website URL / Navigation
                 elif "open " in msg_lower or "go to" in msg_lower or "navigate to" in msg_lower:
                     import re
                     url_match = re.search(r'(https?://\S+|www\.\S+|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/?\S*)', message)
+                    
+                    url = ""
                     if url_match:
                         url = url_match.group()
-                        if not url.startswith("http"):
-                            url = "https://" + url
+                    else:
+                        for prefix in ["open ", "go to ", "navigate to "]:
+                            if prefix in msg_lower:
+                                candidate = message.split(prefix, 1)[1].strip().rstrip(".")
+                                if browser.is_valid_url_or_domain(candidate):
+                                    url = candidate
+                                    break
+
+                    if url:
                         await self._emit("tool_started", {"tool": "open_url", "message": f"Opening {url}..."})
                         result = await browser.open_url(url)
-                        
-                        if "error" in result:
-                            await self._emit("tool_done", {"tool": "open_url", "result": result["error"]})
-                            await audit_log.update_action(action_id, status="failed", result=result["error"])
-                            return result["error"]
+                        await self._emit("tool_done", {"tool": "open_url", "result": result.get("message") or "Page opened."})
 
-                        await self._emit("tool_done", {"tool": "open_url", "result": f"Opened {url}"})
-                        response_str = f"Opened browser search. Opened {url}."
-                        await audit_log.update_action(action_id, status="completed", result=response_str)
-                        return response_str
-                    else:
-                        res_str = "I did not understand what to open. Do you mean an app, a file, or a website?"
-                        await audit_log.update_action(action_id, status="failed", result=res_str)
+                        res_str = result.get("message", "Navigation failed.")
+                        status = "completed" if result.get("success") else "failed"
+
+                        log_details = {
+                            "command": message,
+                            "action": result.get("action"),
+                            "target": result.get("target"),
+                            "success": result.get("success"),
+                            "verified": result.get("verified"),
+                            "url": result.get("url"),
+                            "title": result.get("title"),
+                            "error": result.get("error")
+                        }
+                        await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
                         return res_str
+                    else:
+                        clarification = "I did not understand what to open. Do you mean an app, a file, or a website?"
+                        await audit_log.update_action(action_id, status="failed", result=clarification)
+                        return clarification
                 else:
                     return await self._handle_chat(message)
             except Exception as be:
@@ -660,7 +734,7 @@ class TaskPlanner:
             "search chrome for ", "search google for ", "search for ",
             "search the web for ", "search bing for ", "search duckduckgo for ",
             "google ", "search ", "look up ", "find information about ",
-            "search chrome ", "web search ",
+            "search chrome ", "web search ", "find latest ",
         ]
         for prefix in prefixes:
             if msg_lower.startswith(prefix):

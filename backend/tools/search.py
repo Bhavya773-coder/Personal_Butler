@@ -1,8 +1,8 @@
 """
 JARVIS Core — Web Search Orchestrator
 
-High-level search tool that uses browser.py to perform web searches
-and return structured, summarized results.
+High-level search tool that delegates to browser.py to perform web searches
+and return structured results.
 """
 
 import logging
@@ -17,49 +17,49 @@ async def web_search(query: str, engine: str = "google") -> dict:
     Automatically launches browser if needed.
     """
     # Ensure browser is running
-    launch_result = await launch_browser()
-    if "error" in launch_result:
-        return launch_result
+    launch_res = await launch_browser()
+    if not launch_res["success"]:
+        return launch_res
 
     # Perform search
-    result = await search_web(query, engine)
-    if "error" in result:
-        return result
-
-    # Format results for display
-    results = result.get("results", [])
-    if results:
-        summary_parts = []
-        for i, r in enumerate(results[:5], 1):
-            summary_parts.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}")
-
-        result["summary"] = "\n\n".join(summary_parts)
-        result["result_count"] = len(results)
-    else:
-        result["summary"] = f"Search completed for '{query}' but no structured results could be extracted. The page is open in the browser."
-
-    return result
+    return await search_web(query, engine)
 
 
 async def search_and_read(query: str, result_index: int = 0) -> dict:
     """
-    Search the web, open the first result, and read its content.
+    Search the web, open the result at result_index, and read its content.
     """
-    search_result = await web_search(query)
-    if "error" in search_result:
-        return search_result
+    search_res = await web_search(query)
+    if not search_res["success"]:
+        return search_res
 
-    results = search_result.get("results", [])
+    results = search_res.get("results", [])
     if not results:
-        return {"error": "No results found to read."}
+        return {
+            "success": False,
+            "verified": False,
+            "action": "search",
+            "target": query,
+            "message": "No search results found to read.",
+            "results": [],
+            "url": search_res.get("url"),
+            "title": search_res.get("title"),
+            "text_preview": None,
+            "error": "No search results found to read."
+        }
 
-    if result_index >= len(results):
+    if result_index < 0 or result_index >= len(results):
         result_index = 0
 
-    # The page should already be showing search results in the browser
-    content = await get_page_content()
-    return {
-        "search_query": query,
-        "results": results[:5],
-        "page_content": content,
-    }
+    target_result = results[result_index]
+    url = target_result["url"]
+
+    # Open URL
+    from tools.browser import open_url
+    open_res = await open_url(url)
+    if not open_res["success"]:
+        return open_res
+
+    # Read page content
+    content_res = await get_page_content()
+    return content_res
