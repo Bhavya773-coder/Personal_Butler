@@ -158,31 +158,8 @@ class TaskPlanner:
         elif intent == "pc_control":
             action_id = await audit_log.log_action(self.session_id, "tool", "pc_control_action", details={"message": message})
             try:
-                if "notepad" in msg_lower and any(w in msg_lower for w in ["open", "launch", "start", "run"]):
-                    await self._emit("tool_started", {"tool": "open_application", "message": "Opening Notepad..."})
-                    result = await pc_control.open_application("notepad")
-                    await self._emit("tool_done", {"tool": "open_application", "result": str(result)})
-                    res_str = "Opened Notepad." if result.get("success") else result.get("error", "Failed to open.")
-                    await audit_log.update_action(action_id, status="completed", result=res_str)
-                    return res_str
-
-                elif ("calculator" in msg_lower or "calc" in msg_lower) and any(w in msg_lower for w in ["open", "launch", "start", "run"]):
-                    await self._emit("tool_started", {"tool": "open_application", "message": "Opening Calculator..."})
-                    result = await pc_control.open_application("calculator")
-                    await self._emit("tool_done", {"tool": "open_application", "result": str(result)})
-                    res_str = "Opened Calculator." if result.get("success") else result.get("error", "Failed to open.")
-                    await audit_log.update_action(action_id, status="completed", result=res_str)
-                    return res_str
-
-                elif ("chrome" in msg_lower or "google chrome" in msg_lower or "browser" in msg_lower) and any(w in msg_lower for w in ["open", "launch", "start", "run"]):
-                    await self._emit("tool_started", {"tool": "open_application", "message": "Opening Chrome..."})
-                    result = await pc_control.open_application("chrome")
-                    await self._emit("tool_done", {"tool": "open_application", "result": str(result)})
-                    res_str = "Opened Chrome." if result.get("success") else result.get("error", "Failed to open.")
-                    await audit_log.update_action(action_id, status="completed", result=res_str)
-                    return res_str
-
-                elif "screenshot" in msg_lower:
+                # Determine if we should open something or take screenshot
+                if "screenshot" in msg_lower:
                     await self._emit("permission_required", {
                         "action": "take_screenshot",
                         "description": "Take a screenshot of your screen",
@@ -203,38 +180,90 @@ class TaskPlanner:
                     await audit_log.update_action(action_id, status="completed", result=res_str)
                     return res_str
 
-                elif any(v in msg_lower for v in ["open ", "launch ", "start ", "run ", "show "]):
-                    # Extract target name
-                    target_name = ""
-                    for v in ["open the ", "open ", "launch ", "start ", "run ", "show "]:
-                        if v in msg_lower:
-                            target_name = msg_lower.split(v, 1)[1].strip().rstrip(".")
-                            break
-                    if target_name:
-                        app_exec_name = target_name
-                        if target_name in ["vs code", "vscode", "visual studio code"]:
-                            app_exec_name = "code"
-                        elif target_name in ["chrome", "google chrome", "browser"]:
-                            app_exec_name = "chrome"
-                        elif target_name in ["downloads", "downloads folder", "my downloads"]:
-                            app_exec_name = "downloads"
-                        elif target_name in ["desktop", "desktop folder", "my desktop"]:
-                            app_exec_name = "desktop"
-                        elif target_name in ["documents", "documents folder", "my documents"]:
-                            app_exec_name = "documents"
-                        elif target_name in ["notepad", "the notepad"]:
-                            app_exec_name = "notepad"
-                        elif target_name in ["calculator", "calc"]:
-                            app_exec_name = "calculator"
+                # Try to parse target name for opening
+                target_name = ""
+                for v in ["open the ", "open ", "launch ", "start ", "run ", "show "]:
+                    if v in msg_lower:
+                        target_name = msg_lower.split(v, 1)[1].strip().rstrip(".")
+                        break
+                
+                # Check for specific app names in msg_lower directly to be safe
+                matched_app = None
+                for app in ["notepad", "calculator", "calc", "chrome", "google chrome", "downloads", "desktop", "documents", "vscode", "vs code", "visual studio code"]:
+                    if app in msg_lower:
+                        matched_app = app
+                        break
+                
+                # If target_name is empty but we matched an app, use the matched app
+                if not target_name and matched_app:
+                    target_name = matched_app
 
-                        await self._emit("tool_started", {"tool": "open_application", "message": f"Opening {target_name}..."})
+                if target_name:
+                    app_exec_name = target_name
+                    target_lower = target_name.lower()
+                    if target_lower in ["vs code", "vscode", "visual studio code"]:
+                        app_exec_name = "vscode"
+                    elif target_lower in ["chrome", "google chrome", "browser"]:
+                        app_exec_name = "chrome"
+                    elif target_lower in ["downloads", "downloads folder", "my downloads"]:
+                        app_exec_name = "downloads"
+                    elif target_lower in ["desktop", "desktop folder", "my desktop"]:
+                        app_exec_name = "desktop"
+                    elif target_lower in ["documents", "documents folder", "my documents"]:
+                        app_exec_name = "documents"
+                    elif target_lower in ["notepad", "the notepad"]:
+                        app_exec_name = "notepad"
+                    elif target_lower in ["calculator", "calc"]:
+                        app_exec_name = "calculator"
+
+                    # Now verify if app_exec_name is valid (mapped app or folder or local path)
+                    from tools.pc_control import APP_MAP
+                    is_valid_app = (app_exec_name.lower() in ["notepad", "calculator", "calc", "chrome", "google chrome", "downloads", "desktop", "documents", "vscode", "vs code", "visual studio code"] or 
+                                    app_exec_name.lower() in APP_MAP)
+                    is_valid_path = Path(target_name).exists()
+                    
+                    import re
+                    url_match = re.search(r'(https?://\S+|www\.\S+|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/?\S*)', message)
+
+                    if is_valid_app or is_valid_path:
+                        # Determine if folder or app
+                        is_folder = app_exec_name.lower() in ["downloads", "desktop", "documents"] or is_valid_path
+                        tool_name = "open_folder" if is_folder else "open_application"
+                        disp_name = target_name.capitalize()
+                        
+                        await self._emit("tool_started", {"tool": tool_name, "message": f"Opening {disp_name}..."})
                         result = await pc_control.open_application(app_exec_name)
-                        await self._emit("tool_done", {"tool": "open_application", "result": str(result)})
-                        res_str = f"Opened {target_name}." if result.get("success") else result.get("error", f"Failed to open {target_name}.")
-                        await audit_log.update_action(action_id, status="completed", result=res_str)
+                        await self._emit("tool_done", {"tool": tool_name, "result": str(result)})
+                        
+                        res_str = result.get("message", "Opened.")
+                        status = "completed" if result.get("success") else "failed"
+                        await audit_log.update_action(action_id, status=status, result=res_str)
                         return res_str
+
+                    elif url_match:
+                        # Redirect to URL opening!
+                        url = url_match.group()
+                        if not url.startswith("http"):
+                            url = "https://" + url
+                        await self._emit("tool_started", {"tool": "open_url", "message": f"Opening {url}..."})
+                        result = await browser.open_url(url)
+                        
+                        if "error" in result:
+                            err_str = result["error"]
+                            await self._emit("tool_done", {"tool": "open_url", "result": err_str})
+                            await audit_log.update_action(action_id, status="failed", result=err_str)
+                            return err_str
+
+                        success_msg = f"Opened {url}."
+                        await self._emit("tool_done", {"tool": "open_url", "result": success_msg})
+                        await audit_log.update_action(action_id, status="completed", result=success_msg)
+                        return success_msg
+
                     else:
-                        return await self._handle_chat(message)
+                        # Vague phrase, return clarification
+                        clarification = "I did not understand what to open. Do you mean an app, a file, or a website?"
+                        await audit_log.update_action(action_id, status="failed", result=clarification)
+                        return clarification
                 else:
                     return await self._handle_chat(message)
             except Exception as pe:
@@ -249,8 +278,9 @@ class TaskPlanner:
                     await self._emit("tool_started", {"tool": "open_application", "message": "Opening Chrome..."})
                     result = await pc_control.open_application("chrome")
                     await self._emit("tool_done", {"tool": "open_application", "result": str(result)})
-                    res_str = "Opened Chrome." if result.get("success") else result.get("error", "Failed to open Chrome.")
-                    await audit_log.update_action(action_id, status="completed", result=res_str)
+                    res_str = result.get("message", "Opened Chrome.")
+                    status = "completed" if result.get("success") else "failed"
+                    await audit_log.update_action(action_id, status=status, result=res_str)
                     return res_str
 
                 # 1. Search Google/Chrome
@@ -361,7 +391,7 @@ class TaskPlanner:
                         await audit_log.update_action(action_id, status="completed", result=response_str)
                         return response_str
                     else:
-                        res_str = "What should I open - a file, app, or website?"
+                        res_str = "I did not understand what to open. Do you mean an app, a file, or a website?"
                         await audit_log.update_action(action_id, status="failed", result=res_str)
                         return res_str
                 else:

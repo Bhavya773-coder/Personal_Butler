@@ -57,7 +57,7 @@ const StatusBar: React.FC<StatusBarProps> = ({
 
       {/* Version */}
       <div className="status-bar__item status-bar__version">
-        JARVIS Core v0.1.0
+        JARVIS Core v0.2.1
       </div>
     </div>
   )

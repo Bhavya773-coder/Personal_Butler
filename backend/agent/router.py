@@ -43,7 +43,7 @@ KEYWORD_PATTERNS: dict[str, list[str]] = {
         "open downloads", "open desktop", "open documents",
         "open the notepad", "please open notepad", "launch notepad", "start notepad", "run notepad",
         "can you open the notepad", "please open calculator", "start calculator",
-        "please open chrome", "start chrome", "please open downloads", "start downloads",
+        "open chrome", "please open chrome", "start chrome", "please open downloads", "start downloads",
         "please open desktop", "start desktop"
     ],
     "system_info": [

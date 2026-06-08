@@ -105,6 +105,57 @@ def verify_process_exists(proc_names: list[str]) -> bool:
     return False
 
 
+async def open_folder_action(name: str) -> dict:
+    """Open a folder by name or path and return structured result."""
+    name_lower = name.lower().strip()
+    userprofile = os.getenv("USERPROFILE", os.path.expanduser("~"))
+    
+    if name_lower in ["downloads", "downloads folder", "my downloads", "explorer/downloads"]:
+        folder_path = os.path.join(userprofile, "Downloads")
+        target_name = "Downloads"
+    elif name_lower in ["desktop", "desktop folder", "my desktop", "explorer/desktop"]:
+        folder_path = os.path.join(userprofile, "Desktop")
+        target_name = "Desktop"
+    elif name_lower in ["documents", "documents folder", "my documents", "explorer/documents"]:
+        folder_path = os.path.join(userprofile, "Documents")
+        target_name = "Documents"
+    else:
+        folder_path = name
+        target_name = name
+
+    target = Path(folder_path).resolve()
+    if not target.exists():
+        return {
+            "success": False,
+            "verified": False,
+            "target": name,
+            "command": f'explorer.exe "{folder_path}"',
+            "message": f"I tried to open {target_name}, but Windows did not find the folder.",
+            "error": f"Folder path does not exist: {folder_path}"
+        }
+
+    try:
+        cmd = f'explorer.exe "{target}"'
+        subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return {
+            "success": True,
+            "verified": True,
+            "target": name,
+            "command": cmd,
+            "message": f"Opened {target_name}.",
+            "error": None
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "verified": False,
+            "target": name,
+            "command": f'explorer.exe "{target}"',
+            "message": f"I tried to open {target_name}, but Windows did not start it.",
+            "error": str(e)
+        }
+
+
 async def open_application(name: str) -> dict:
     """Open an application by name and verify launch."""
     name_lower = name.lower().strip()
@@ -114,95 +165,172 @@ async def open_application(name: str) -> dict:
     proc_names = []
     executable_cmd = None
 
+    # Resolve folder redirects first
+    if name_lower in [
+        "downloads", "downloads folder", "my downloads", "explorer/downloads",
+        "desktop", "desktop folder", "my desktop", "explorer/desktop",
+        "documents", "documents folder", "my documents", "explorer/documents"
+    ]:
+        return await open_folder_action(name_lower)
+
+    # 1. Notepad
     if name_lower == "notepad":
         executable_cmd = "notepad.exe"
         proc_names = ["notepad.exe"]
+
+    # 2. Calculator
     elif name_lower in ["calculator", "calc"]:
         executable_cmd = "calc.exe"
         proc_names = ["Calculator.exe", "ApplicationFrameHost.exe", "calc.exe"]
-    elif name_lower in ["downloads", "downloads folder", "my downloads", "explorer/downloads"]:
-        userprofile = os.getenv("USERPROFILE", os.path.expanduser("~"))
-        executable_cmd = f'explorer.exe "{os.path.join(userprofile, "Downloads")}"'
-        proc_names = ["explorer.exe"]
-    elif name_lower in ["desktop", "desktop folder", "my desktop", "explorer/desktop"]:
-        userprofile = os.getenv("USERPROFILE", os.path.expanduser("~"))
-        executable_cmd = f'explorer.exe "{os.path.join(userprofile, "Desktop")}"'
-        proc_names = ["explorer.exe"]
-    elif name_lower in ["documents", "documents folder", "my documents", "explorer/documents"]:
-        userprofile = os.getenv("USERPROFILE", os.path.expanduser("~"))
-        executable_cmd = f'explorer.exe "{os.path.join(userprofile, "Documents")}"'
-        proc_names = ["explorer.exe"]
+
+    # 3. Chrome
+    elif name_lower in ["chrome", "google chrome"]:
+        proc_names = ["chrome.exe", "msedge.exe", "chromium.exe"]
+        chrome_path = find_chrome_path()
+        launched = False
+        cmd_used = None
+        
+        if chrome_path:
+            try:
+                subprocess.Popen(f'"{chrome_path}"', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                cmd_used = chrome_path
+                launched = True
+            except Exception as e:
+                logger.info(f"Failed to launch Chrome via path: {e}")
+                
+        if not launched:
+            try:
+                subprocess.Popen("chrome.exe", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                cmd_used = "chrome.exe"
+                launched = True
+            except Exception as e:
+                logger.info(f"Failed to launch Chrome via 'chrome.exe': {e}")
+                
+        if not launched:
+            logger.info("Chrome executable not found. Falling back to Playwright browser.")
+            from tools.browser import launch_browser
+            result = await launch_browser()
+            if result.get("success"):
+                await asyncio.sleep(1.0)
+                if verify_process_exists(proc_names):
+                    return {
+                        "success": True,
+                        "verified": True,
+                        "target": name,
+                        "command": "Playwright Browser",
+                        "message": "Opened Chrome.",
+                        "error": None
+                    }
+            return {
+                "success": False,
+                "verified": False,
+                "target": name,
+                "command": "Playwright Browser",
+                "message": "I tried to open Chrome, but Windows did not start it.",
+                "error": "Failed to launch chrome."
+            }
+
+        # Verify launched Chrome
+        await asyncio.sleep(1.0)
+        verified = verify_process_exists(proc_names)
+        if verified:
+            return {
+                "success": True,
+                "verified": True,
+                "target": name,
+                "command": cmd_used,
+                "message": "Opened Chrome.",
+                "error": None
+            }
+        else:
+            return {
+                "success": False,
+                "verified": False,
+                "target": name,
+                "command": cmd_used,
+                "message": "I tried to open Chrome, but Windows did not start it.",
+                "error": "Process verification failed."
+            }
+
+    # 4. VS Code
     elif name_lower in ["code", "vs code", "vscode", "visual studio code"]:
         proc_names = ["Code.exe", "code.exe"]
-        # Try 'code' command first
-        try:
-            logger.info("Attempting to open VS Code via 'code' command")
-            subprocess.Popen("code", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            await asyncio.sleep(1.0)
-            if verify_process_exists(proc_names):
-                logger.info("VS Code launch verified (code)")
-                return {"success": True, "application": name, "executable": "code"}
-        except Exception as e:
-            logger.info(f"Failed to start VS Code via code command: {e}")
-
-        # Fallback to absolute path
         vscode_path = find_vscode_path()
+        launched = False
+        cmd_used = None
+        
         if vscode_path:
-            executable_cmd = f'"{vscode_path}"'
-        else:
-            return {"error": "VS Code not found. Make sure it's installed."}
+            try:
+                subprocess.Popen(f'"{vscode_path}"', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                cmd_used = vscode_path
+                launched = True
+            except Exception as e:
+                logger.info(f"Failed to launch VS Code via path: {e}")
+                
+        if not launched:
+            try:
+                subprocess.Popen("code", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                cmd_used = "code"
+                launched = True
+            except Exception as e:
+                logger.info(f"Failed to launch VS Code via 'code': {e}")
+                
+        if not launched:
+            return {
+                "success": False,
+                "verified": False,
+                "target": name,
+                "command": "code",
+                "message": "VS Code not found. Make sure it's installed.",
+                "error": "VS Code executable not found."
+            }
             
-    elif name_lower in ["chrome", "google chrome"]:
-        proc_names = ["chrome.exe"]
-        # Try 'start chrome'
-        try:
-            logger.info("Attempting to open Chrome via 'start chrome' command")
-            subprocess.Popen("start chrome", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            await asyncio.sleep(1.0)
-            if verify_process_exists(proc_names):
-                logger.info("Chrome launch verified (start chrome)")
-                return {"success": True, "application": name, "executable": "start chrome"}
-        except Exception as e:
-            logger.info(f"Failed to start Chrome via start chrome: {e}")
+        await asyncio.sleep(1.0)
+        verified = verify_process_exists(proc_names)
+        if verified:
+            return {
+                "success": True,
+                "verified": True,
+                "target": name,
+                "command": cmd_used,
+                "message": "Opened VS Code.",
+                "error": None
+            }
+        else:
+            return {
+                "success": False,
+                "verified": False,
+                "target": name,
+                "command": cmd_used,
+                "message": "I tried to open VS Code, but Windows did not start it.",
+                "error": "Process verification failed."
+            }
 
-        # Try common paths
-        for path in [
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-        ]:
-            if Path(path).exists():
-                try:
-                    logger.info(f"Attempting to open Chrome via path: {path}")
-                    subprocess.Popen(f'"{path}"', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    await asyncio.sleep(1.0)
-                    if verify_process_exists(proc_names):
-                        logger.info(f"Chrome launch verified ({path})")
-                        return {"success": True, "application": name, "executable": path}
-                except Exception as e:
-                    logger.info(f"Failed to start Chrome via path {path}: {e}")
-
-        # Fallback to Playwright browser
-        logger.info("Falling back to Playwright browser launch")
-        from tools.browser import launch_browser
-        result = await launch_browser()
-        if result.get("success"):
-            if verify_process_exists(["chrome.exe", "chromium.exe"]):
-                logger.info("Chrome/Chromium launch verified via Playwright")
-                return {"success": True, "application": name, "executable": "Playwright Browser"}
-        return {"error": "I tried to open Chrome, but Windows did not start it."}
-
+    # 5. Fallback mapping
     else:
-        # Fallback to APP_MAP or raw name
-        exec_name = APP_MAP.get(name_lower, name_lower)
+        if name_lower in APP_MAP:
+            exec_name = APP_MAP[name_lower]
+        else:
+            return {
+                "success": False,
+                "verified": False,
+                "target": name,
+                "command": None,
+                "message": "I did not understand what to open. Do you mean an app, a file, or a website?",
+                "error": "Unmapped application"
+            }
+            
         executable_cmd = exec_name
-        p_name = exec_name if exec_name.endswith(".exe") else f"{exec_name}.exe"
-        proc_names = [p_name, exec_name]
+        if exec_name.startswith("ms-"):
+            proc_names = ["SystemSettings.exe"]
+        else:
+            p_name = exec_name if exec_name.endswith(".exe") else f"{exec_name}.exe"
+            proc_names = [p_name, exec_name]
 
-    # Execute and verify
+    # Execute mapped fallback app
     try:
         logger.info(f"Running command: {executable_cmd}")
         if executable_cmd.startswith("ms-"):
-            # Windows URI scheme
             os.startfile(executable_cmd)
         else:
             subprocess.Popen(
@@ -212,23 +340,41 @@ async def open_application(name: str) -> dict:
                 stderr=subprocess.DEVNULL,
             )
         
-        # Wait 1 second and verify process launch
         await asyncio.sleep(1.0)
-        
         verified = verify_process_exists(proc_names)
         logger.info(f"tool: pc_control.open_app | target: {name} | success: {verified} | verified_process: {verified}")
         
+        capitalized_target = name.capitalize() if len(name) > 0 else ""
         if verified:
-            return {"success": True, "application": name, "executable": executable_cmd}
+            return {
+                "success": True,
+                "verified": True,
+                "target": name,
+                "command": executable_cmd,
+                "message": f"Opened {capitalized_target}.",
+                "error": None
+            }
         else:
-            return {"error": f"I tried to open {name.capitalize()}, but Windows did not start it."}
+            return {
+                "success": False,
+                "verified": False,
+                "target": name,
+                "command": executable_cmd,
+                "message": f"I tried to open {capitalized_target}, but Windows did not start it.",
+                "error": "Process verification failed."
+            }
             
-    except FileNotFoundError as e:
-        logger.error(f"Application launch failed - file not found: {e}")
-        return {"error": f"Application not found: {name}. Make sure it's installed."}
     except Exception as e:
         logger.error(f"Application launch failed: {e}")
-        return {"error": f"Failed to open {name}: {str(e)}"}
+        capitalized_target = name.capitalize() if len(name) > 0 else ""
+        return {
+            "success": False,
+            "verified": False,
+            "target": name,
+            "command": executable_cmd,
+            "message": f"I tried to open {capitalized_target}, but Windows did not start it.",
+            "error": str(e)
+        }
 
 
 class PCControlTool:
@@ -236,19 +382,42 @@ class PCControlTool:
     async def open_app(self, name: str) -> dict:
         return await open_application(name)
 
+    async def open_folder(self, name: str) -> dict:
+        return await open_folder_action(name)
+
 
 def open_file_or_folder(path: str) -> dict:
     """Open a file or folder using the default system handler."""
     target = Path(path).resolve()
     if not target.exists():
-        return {"error": f"Path does not exist: {target}"}
+        return {
+            "success": False,
+            "verified": False,
+            "target": path,
+            "command": f'os.startfile("{path}")',
+            "message": f"I tried to open {path}, but the path does not exist.",
+            "error": "Path does not exist"
+        }
 
     try:
         os.startfile(str(target))
-        logger.info(f"Opened: {target}")
-        return {"success": True, "path": str(target)}
+        return {
+            "success": True,
+            "verified": True,
+            "target": path,
+            "command": f'os.startfile("{target}")',
+            "message": f"Opened {target.name}.",
+            "error": None
+        }
     except Exception as e:
-        return {"error": f"Failed to open: {str(e)}"}
+        return {
+            "success": False,
+            "verified": False,
+            "target": path,
+            "command": f'os.startfile("{target}")',
+            "message": f"Failed to open: {str(e)}",
+            "error": str(e)
+        }
 
 
 def take_screenshot(save_path: Optional[str] = None, confirmed: bool = False) -> dict:
