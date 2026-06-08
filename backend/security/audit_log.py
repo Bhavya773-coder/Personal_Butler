@@ -165,11 +165,10 @@ class AuditLog:
             return []
 
         logs: list[dict] = []
-
-        # Fetch recent conversations
         where = "WHERE session_id = ?" if session_id else ""
         params = (session_id,) if session_id else ()
 
+        # Fetch recent conversations
         async with self._db.execute(
             f"SELECT * FROM conversations {where} ORDER BY id DESC LIMIT ?",
             (*params, limit),
@@ -181,6 +180,7 @@ class AuditLog:
                 entry["table"] = "conversations"
                 logs.append(entry)
 
+        # Fetch recent actions
         async with self._db.execute(
             f"SELECT * FROM actions {where} ORDER BY id DESC LIMIT ?",
             (*params, limit),
@@ -190,6 +190,30 @@ class AuditLog:
             for row in rows:
                 entry = dict(zip(cols, row))
                 entry["table"] = "actions"
+                logs.append(entry)
+
+        # Fetch recent permissions
+        async with self._db.execute(
+            f"SELECT * FROM permissions {where} ORDER BY id DESC LIMIT ?",
+            (*params, limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            cols = [d[0] for d in cursor.description]
+            for row in rows:
+                entry = dict(zip(cols, row))
+                entry["table"] = "permissions"
+                logs.append(entry)
+
+        # Fetch recent errors
+        async with self._db.execute(
+            f"SELECT * FROM errors {where} ORDER BY id DESC LIMIT ?",
+            (*params, limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            cols = [d[0] for d in cursor.description]
+            for row in rows:
+                entry = dict(zip(cols, row))
+                entry["table"] = "errors"
                 logs.append(entry)
 
         # Sort by timestamp descending

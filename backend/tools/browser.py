@@ -28,10 +28,24 @@ async def launch_browser(headless: bool = False) -> dict:
         from playwright.async_api import async_playwright
 
         pw = await async_playwright().start()
-        _browser = await pw.chromium.launch(
-            headless=headless,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        
+        try:
+            # Try launching system Chrome first
+            _browser = await pw.chromium.launch(
+                headless=headless,
+                channel="chrome",
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            logger.info("Launched system Google Chrome via Playwright")
+        except Exception as chrome_err:
+            logger.info(f"System Chrome launch failed ({chrome_err}), falling back to bundled Chromium")
+            # Fallback to bundled Playwright Chromium
+            _browser = await pw.chromium.launch(
+                headless=headless,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            logger.info("Launched bundled Chromium via Playwright")
+
         _context = await _browser.new_context(
             viewport={"width": 1280, "height": 900},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -41,11 +55,19 @@ async def launch_browser(headless: bool = False) -> dict:
         logger.info("Browser launched successfully")
         return {"success": True, "message": "Browser launched."}
 
+    except ImportError:
+        logger.error("Playwright library is not installed in the python environment.")
+        return {
+            "error": "Browser automation failed: Playwright library is not installed in the python environment. Please run: pip install playwright"
+        }
     except Exception as e:
         logger.error(f"Browser launch failed: {e}")
+        err_msg = str(e)
+        if "Executable doesn't exist" in err_msg or "playwright install" in err_msg.lower() or "chromium" in err_msg.lower():
+            return {"error": "Playwright browser missing. Run: python -m playwright install chromium"}
         return {
-            "error": f"Browser automation failed: {str(e)}. "
-            "Check Playwright installation. Run: playwright install chromium"
+            "error": f"Browser automation failed: {err_msg}. "
+            "Check Playwright installation. Make sure Chromium is installed by running: playwright install chromium"
         }
 
 
@@ -78,8 +100,15 @@ async def _ensure_page():
 async def open_url(url: str) -> dict:
     """Navigate to a URL."""
     try:
+        from agent.planner import planner
+        if planner._interrupted:
+            return {"error": "Interrupted"}
         page = await _ensure_page()
+        if planner._interrupted:
+            return {"error": "Interrupted"}
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        if planner._interrupted:
+            return {"error": "Interrupted"}
         title = await page.title()
         logger.info(f"Opened URL: {url} — {title}")
         return {"success": True, "url": url, "title": title}
@@ -98,9 +127,18 @@ async def search_web(query: str, engine: str = "google") -> dict:
     url = search_urls.get(engine.lower(), search_urls["google"])
 
     try:
+        from agent.planner import planner
+        if planner._interrupted:
+            return {"error": "Interrupted"}
         page = await _ensure_page()
+        if planner._interrupted:
+            return {"error": "Interrupted"}
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        if planner._interrupted:
+            return {"error": "Interrupted"}
         await page.wait_for_timeout(2000)  # Let results load
+        if planner._interrupted:
+            return {"error": "Interrupted"}
 
         title = await page.title()
 
@@ -214,10 +252,19 @@ async def get_page_content(max_chars: int = 5000) -> dict:
 async def click_link(text: str) -> dict:
     """Click a link on the current page by its text content."""
     try:
+        from agent.planner import planner
+        if planner._interrupted:
+            return {"error": "Interrupted"}
         page = await _ensure_page()
+        if planner._interrupted:
+            return {"error": "Interrupted"}
         link = await page.query_selector(f"a:has-text('{text}')")
         if link:
+            if planner._interrupted:
+                return {"error": "Interrupted"}
             await link.click()
+            if planner._interrupted:
+                return {"error": "Interrupted"}
             await page.wait_for_load_state("domcontentloaded")
             new_title = await page.title()
             return {"success": True, "clicked": text, "new_page_title": new_title}

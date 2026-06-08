@@ -16,10 +16,13 @@ logger = logging.getLogger("jarvis.agent.router")
 # Quick keyword-based classification (faster than LLM for obvious intents)
 KEYWORD_PATTERNS: dict[str, list[str]] = {
     "browser": [
-        "search chrome", "open chrome", "browse", "search for", "search the web",
+        "search chrome", "browse", "search for", "search the web",
         "google", "search google", "open url", "open website", "search bing",
         "search duckduckgo", "web search", "look up online", "search online",
-        "open browser",
+        "youtube.com", "open youtube", ".com", ".org", ".net",
+        "http://", "https://", "go to", "navigate to", "first result",
+        "summarize this page", "summarize this website", "summarize page",
+        "summarize this",
     ],
     "filesystem": [
         "create folder", "create a folder", "make folder", "make a folder",
@@ -27,24 +30,31 @@ KEYWORD_PATTERNS: dict[str, list[str]] = {
         "copy file", "move file", "rename file", "delete file",
         "search downloads", "search desktop", "search documents",
         "find pdf", "find document", "open folder", "list folder",
-        "what files", "show files", "search my",
+        "what files", "show files", "search my", "downloads folder",
+        "desktop folder", "documents folder", "find files named", "read this",
+        "list files in",
     ],
     "pc_control": [
         "open notepad", "open calculator", "open calc", "open paint",
         "open explorer", "open task manager", "open app", "open application",
         "launch", "take screenshot", "type text", "press key",
-        "open word", "open excel", "open vscode", "open spotify",
+        "open word", "open excel", "open vscode", "open vs code", "open spotify",
         "open discord", "open settings", "open edge", "open firefox",
+        "open downloads", "open desktop", "open documents",
+        "open the notepad", "please open notepad", "launch notepad", "start notepad", "run notepad",
+        "can you open the notepad", "please open calculator", "start calculator",
+        "please open chrome", "start chrome", "please open downloads", "start downloads",
+        "please open desktop", "start desktop"
     ],
     "system_info": [
         "cpu", "ram", "memory", "disk", "system info", "system status",
         "how much memory", "processor", "usage", "disk space",
-        "storage", "battery", "uptime",
+        "storage", "battery", "uptime", "free disk", "free space",
     ],
 }
 
 # Intent → response when action is a stop/interrupt
-STOP_WORDS = {"stop", "cancel", "abort", "interrupt", "halt", "enough", "shut up", "be quiet", "nevermind", "never mind"}
+STOP_WORDS = {"stop", "cancel", "abort", "interrupt", "halt", "enough", "shut up", "be quiet", "nevermind", "never mind", "wait", "pause"}
 
 
 def quick_classify(message: str) -> str | None:

@@ -1,28 +1,28 @@
 /**
  * JARVIS Core — Audio / Speech Recognition Service
  * 
- * Wraps the Web Speech API for live speech-to-text.
- * Abstracted so faster-whisper or other STT can replace it later.
+ * Delegates speech-to-text to the local Python backend via WebSockets
+ * to bypass Electron's built-in webkitSpeechRecognition API key restrictions.
  */
+
+import { wsService } from './websocket'
 
 export type TranscriptionCallback = (text: string, isFinal: boolean) => void
 export type StatusCallback = (status: 'listening' | 'stopped' | 'error', error?: string) => void
 
 class AudioService {
-  private recognition: any = null
   private _isListening = false
   private onTranscription: TranscriptionCallback | null = null
   private onStatus: StatusCallback | null = null
+  private unsubscribers: (() => void)[] = []
 
   get isListening(): boolean {
     return this._isListening
   }
 
   get isSupported(): boolean {
-    return !!(
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition
-    )
+    // Backend STT is always supported locally
+    return true
   }
 
   /** Initialize speech recognition */
@@ -30,93 +30,45 @@ class AudioService {
     this.onTranscription = onTranscription
     this.onStatus = onStatus
 
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition
+    // Clean up any old listeners
+    this.unsubscribers.forEach(unsub => unsub())
+    this.unsubscribers = []
 
-    if (!SpeechRecognition) {
-      console.error('[Audio] Speech recognition not supported')
-      onStatus('error', 'Speech recognition not supported in this browser')
-      return
-    }
-
-    this.recognition = new SpeechRecognition()
-    this.recognition.continuous = true
-    this.recognition.interimResults = true
-    this.recognition.lang = 'en-US'
-    this.recognition.maxAlternatives = 1
-
-    this.recognition.onresult = (event: any) => {
-      let interimTranscript = ''
-      let finalTranscript = ''
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript
-        } else {
-          interimTranscript += transcript
-        }
-      }
-
-      if (finalTranscript) {
-        this.onTranscription?.(finalTranscript, true)
-      } else if (interimTranscript) {
-        this.onTranscription?.(interimTranscript, false)
-      }
-    }
-
-    this.recognition.onerror = (event: any) => {
-      console.error('[Audio] Recognition error:', event.error)
-      if (event.error === 'not-allowed') {
-        this.onStatus?.('error', 'Microphone blocked. Enable microphone permission.')
-      } else if (event.error === 'no-speech') {
-        // Don't treat no-speech as a fatal error, just keep listening
-      } else {
-        this.onStatus?.('error', `Speech recognition error: ${event.error}`)
-      }
-    }
-
-    this.recognition.onend = () => {
-      // Auto-restart if we're supposed to be listening
+    // Listen to WebSocket events from backend
+    const unsubPartial = wsService.on('transcription_partial', (event: any) => {
       if (this._isListening) {
-        try {
-          this.recognition.start()
-        } catch (e) {
-          this._isListening = false
-          this.onStatus?.('stopped')
-        }
-      } else {
-        this.onStatus?.('stopped')
+        this.onTranscription?.(event.text || '', false)
       }
-    }
+    })
+
+    const unsubFinal = wsService.on('transcription_final', (event: any) => {
+      if (this._isListening) {
+        this.onTranscription?.(event.text || '', true)
+        // Automatically set listening state to stopped or keep listening based on mode
+        this.stop()
+      }
+    })
+
+    const unsubError = wsService.on('stt_error', (event: any) => {
+      this.onStatus?.('error', event.message || 'Speech recognition failed')
+      this.stop()
+    })
+
+    this.unsubscribers.push(unsubPartial, unsubFinal, unsubError)
   }
 
   /** Start listening */
   start(): void {
-    if (!this.recognition) {
-      this.onStatus?.('error', 'Speech recognition not initialized')
-      return
-    }
-
-    try {
-      this._isListening = true
-      this.recognition.start()
-      this.onStatus?.('listening')
-    } catch (e) {
-      // May already be started
-      console.warn('[Audio] Start error:', e)
-    }
+    this._isListening = true
+    wsService.send({ type: 'start_stt' })
+    this.onStatus?.('listening')
   }
 
   /** Stop listening */
   stop(): void {
+    if (!this._isListening) return
     this._isListening = false
-    try {
-      this.recognition?.stop()
-    } catch (e) {
-      // Ignore
-    }
+    wsService.send({ type: 'stop_stt' })
     this.onStatus?.('stopped')
   }
 

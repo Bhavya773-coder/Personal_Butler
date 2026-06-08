@@ -12,7 +12,7 @@ import CommandInput from './components/CommandInput'
 import StatusBar from './components/StatusBar'
 import PermissionModal, { PermissionRequest } from './components/PermissionModal'
 import { wsService, JarvisEvent } from './services/websocket'
-import { checkHealth, sendInterrupt } from './services/api'
+import { checkHealth, sendInterrupt, approvePermission, denyPermission } from './services/api'
 import { audioService } from './services/audio'
 
 let entryCounter = 0
@@ -269,13 +269,25 @@ const App: React.FC = () => {
     audioService.toggle()
   }, [])
 
-  const handlePermissionApprove = useCallback((id: string) => {
-    wsService.sendPermissionResponse(id, true)
+  const handlePermissionApprove = useCallback(async (id: string) => {
+    try {
+      await approvePermission(id)
+    } catch (err) {
+      console.error('Failed to approve permission via REST API:', err)
+      // fallback to WS if api fails
+      wsService.sendPermissionResponse(id, true)
+    }
     setPermissionRequest(null)
   }, [])
 
-  const handlePermissionDeny = useCallback((id: string) => {
-    wsService.sendPermissionResponse(id, false)
+  const handlePermissionDeny = useCallback(async (id: string) => {
+    try {
+      await denyPermission(id)
+    } catch (err) {
+      console.error('Failed to deny permission via REST API:', err)
+      // fallback to WS if api fails
+      wsService.sendPermissionResponse(id, false)
+    }
     setPermissionRequest(null)
   }, [])
 

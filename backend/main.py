@@ -6,6 +6,11 @@ Handles streaming LLM responses, tool execution, permissions, and logging.
 """
 
 import asyncio
+import sys
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 import json
 import logging
 import os
@@ -139,7 +144,7 @@ class ConnectionManager:
 ws_manager = ConnectionManager()
 
 
-# ── Set up planner's WS callback ──────────────────────────────────────
+# ── Set up planner and permission engine's callbacks ──────────────────
 
 async def ws_broadcast(data: dict):
     """Callback for the planner to send events to frontend."""
@@ -148,10 +153,29 @@ async def ws_broadcast(data: dict):
 planner.set_ws_callback(ws_broadcast)
 
 
+async def permission_broadcast(request_id: str, action: str, description: str, level: str, details: dict):
+    """Callback for the permission engine to send requests to frontend."""
+    await ws_manager.broadcast({
+        "type": "permission_required",
+        "request_id": request_id,
+        "action": action,
+        "description": description,
+        "level": level,
+        "details": details,
+    })
+
+permission_engine.set_broadcast_callback(permission_broadcast)
+
+from tools.stt import SpeechRecognizerManager
+stt_manager = SpeechRecognizerManager(ws_manager.broadcast)
+
+
+
 # ── TTS Engine ─────────────────────────────────────────────────────────
 
 _tts_task: asyncio.Task | None = None
 _tts_stop = False
+_active_tts_proc: asyncio.subprocess.Process | None = None
 
 
 async def speak_text(text: str):
@@ -185,10 +209,10 @@ async def speak_text(text: str):
 
 async def _speak_edge_tts(text: str):
     """Speak using Microsoft Edge TTS (free, high quality)."""
+    global _active_tts_proc
     try:
         import edge_tts
         import tempfile
-        import subprocess as _sp
 
         voice = os.getenv("TTS_VOICE", "en-US-GuyNeural")
         communicate = edge_tts.Communicate(text, voice)
@@ -198,11 +222,10 @@ async def _speak_edge_tts(text: str):
 
         await communicate.save(tmp_path)
 
-        # Play audio using ffplay or powershell Media.SoundPlayer
+        # Play audio using PresentationCore MediaPlayer in PowerShell
         if not _tts_stop:
-            # Try ffplay first (handles mp3), fall back to powershell start
             try:
-                proc = await asyncio.create_subprocess_exec(
+                _active_tts_proc = await asyncio.create_subprocess_exec(
                     "powershell", "-c",
                     f'Add-Type -AssemblyName PresentationCore; '
                     f'$p = New-Object System.Windows.Media.MediaPlayer; '
@@ -211,10 +234,11 @@ async def _speak_edge_tts(text: str):
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
-                await proc.wait()
-            except Exception:
-                # Last resort: open with default player
-                pass
+                await _active_tts_proc.wait()
+            except Exception as pe:
+                logger.error(f"MediaPlayer launch failed: {pe}")
+            finally:
+                _active_tts_proc = None
 
         # Cleanup temp file
         try:
@@ -222,9 +246,10 @@ async def _speak_edge_tts(text: str):
         except OSError:
             pass
 
-    except ImportError:
-        logger.warning("edge-tts not installed, falling back to pyttsx3")
+    except Exception as e:
+        logger.warning(f"edge-tts failed ({e}), falling back to pyttsx3")
         await _speak_pyttsx3(text)
+
 
 
 async def _speak_pyttsx3(text: str):
@@ -248,8 +273,14 @@ async def _speak_pyttsx3(text: str):
 
 def stop_tts():
     """Stop current TTS playback."""
-    global _tts_stop, _tts_task
+    global _tts_stop, _tts_task, _active_tts_proc
     _tts_stop = True
+    if _active_tts_proc:
+        try:
+            _active_tts_proc.terminate()
+        except Exception:
+            pass
+        _active_tts_proc = None
     if _tts_task and not _tts_task.done():
         _tts_task.cancel()
 
@@ -310,6 +341,7 @@ async def interrupt():
     """Interrupt the current operation."""
     planner.interrupt()
     stop_tts()
+    stt_manager.stop()
     permission_engine.deny_all()
 
     await ws_manager.broadcast({
@@ -328,7 +360,7 @@ async def permission_approve(request: PermissionResponse):
     if success:
         await audit_log.log_permission(
             planner.session_id, request.request_id,
-            "approved", "confirm", "User approved"
+            "approved", "confirm", "User approved", approved=True
         )
     return {"success": success}
 
@@ -340,7 +372,7 @@ async def permission_deny(request: PermissionResponse):
     if success:
         await audit_log.log_permission(
             planner.session_id, request.request_id,
-            "denied", "confirm", "User denied"
+            "denied", "confirm", "User denied", approved=False
         )
     return {"success": success}
 
@@ -389,6 +421,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif msg_type == "interrupt":
                     planner.interrupt()
                     stop_tts()
+                    stt_manager.stop()
                     permission_engine.deny_all()
                     await ws_manager.broadcast({"type": "interrupted", "message": "Stopped."})
 
@@ -396,6 +429,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     req_id = msg.get("request_id", "")
                     approved = msg.get("approved", False)
                     permission_engine.resolve(req_id, approved)
+
+                elif msg_type == "start_stt":
+                    stt_manager.start()
+
+                elif msg_type == "stop_stt":
+                    stt_manager.stop()
 
             except json.JSONDecodeError:
                 await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
@@ -434,6 +473,7 @@ if __name__ == "__main__":
         "main:app",
         host=host,
         port=port,
-        reload=True,
+        reload=False,
         log_level="info",
     )
+

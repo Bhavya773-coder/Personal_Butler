@@ -16,6 +16,8 @@ logger = logging.getLogger("jarvis.tools.filesystem")
 def list_folders(path: str) -> dict:
     """List contents of a directory."""
     target = Path(path).resolve()
+    if target.drive and target == Path(target.drive).resolve():
+        return {"error": "Listing the root directory of a drive is blocked for safety. Please specify a subfolder."}
     if not target.exists():
         return {"error": f"Path does not exist: {target}"}
     if not target.is_dir():
@@ -47,6 +49,8 @@ def list_folders(path: str) -> dict:
 def search_files(path: str, pattern: str, recursive: bool = True) -> dict:
     """Search for files matching a glob pattern."""
     target = Path(path).resolve()
+    if target.drive and target == Path(target.drive).resolve():
+        return {"error": "Searching the root directory of a drive is blocked for safety. Please specify a subfolder."}
     if not target.exists():
         return {"error": f"Path does not exist: {target}"}
 
@@ -128,6 +132,8 @@ def read_pdf(path: str, max_pages: int = 10) -> dict:
 def create_folder(path: str) -> dict:
     """Create a new folder (including parent directories)."""
     target = Path(path).resolve()
+    if target.drive and target == Path(target.drive).resolve():
+        return {"error": "Modifying the root directory of a drive is blocked for safety."}
     if target.exists():
         return {"error": f"Path already exists: {target}", "path": str(target)}
 
@@ -200,6 +206,8 @@ def delete_file(path: str, confirmed: bool = False) -> dict:
         return {"error": "Deletion requires explicit confirmation.", "requires_confirmation": True}
 
     target = Path(path).resolve()
+    if target.drive and target == Path(target.drive).resolve():
+        return {"error": "Deleting the root directory of a drive is blocked for safety."}
     if not target.exists():
         return {"error": f"Path does not exist: {target}"}
 
@@ -212,3 +220,18 @@ def delete_file(path: str, confirmed: bool = False) -> dict:
         return {"success": True, "deleted": str(target)}
     except Exception as e:
         return {"error": f"Delete failed: {str(e)}"}
+
+
+def get_desktop_path() -> Path:
+    """Get the user's Desktop folder path."""
+    return Path.home() / "Desktop"
+
+
+def get_downloads_path() -> Path:
+    """Get the user's Downloads folder path."""
+    return Path.home() / "Downloads"
+
+
+def get_documents_path() -> Path:
+    """Get the user's Documents folder path."""
+    return Path.home() / "Documents"

@@ -8,11 +8,14 @@ Three-tier permission model:
 """
 
 import asyncio
+import logging
 import uuid
 from enum import Enum
 from typing import Optional
 from dataclasses import dataclass, field
 from datetime import datetime
+
+logger = logging.getLogger("jarvis.security")
 
 
 class PermissionLevel(str, Enum):
@@ -84,6 +87,11 @@ class PermissionEngine:
 
     def __init__(self):
         self._pending: dict[str, PermissionRequest] = {}
+        self._broadcast_callback = None
+
+    def set_broadcast_callback(self, callback):
+        """Register the WebSocket broadcast callback."""
+        self._broadcast_callback = callback
 
     def get_level(self, action: str) -> PermissionLevel:
         """Get the permission level for a given action."""
@@ -117,12 +125,56 @@ class PermissionEngine:
         )
         self._pending[request.id] = request
 
+        # Broadcast the permission request to the frontend
+        if self._broadcast_callback:
+            try:
+                import asyncio
+                if asyncio.iscoroutinefunction(self._broadcast_callback):
+                    await self._broadcast_callback(request.id, action, description, level.value, request.details)
+                else:
+                    self._broadcast_callback(request.id, action, description, level.value, request.details)
+            except Exception as e:
+                logger.error(f"Failed to broadcast permission request: {e}")
+
         try:
             await asyncio.wait_for(request._event.wait(), timeout=timeout)
-            return request.approved or False
+            approved = request.approved or False
+            
+            # Log permission to audit log
+            try:
+                from security.audit_log import audit_log
+                from agent.planner import planner
+                await audit_log.log_permission(
+                    session_id=planner.session_id,
+                    request_id=request.id,
+                    action=action,
+                    level=level.value,
+                    description=description,
+                    approved=approved
+                )
+            except Exception as le:
+                logger.error(f"Failed to log permission: {le}")
+                
+            return approved
         except asyncio.TimeoutError:
             request.resolved = True
             request.approved = False
+            
+            # Log permission timeout
+            try:
+                from security.audit_log import audit_log
+                from agent.planner import planner
+                await audit_log.log_permission(
+                    session_id=planner.session_id,
+                    request_id=request.id,
+                    action=action,
+                    level=level.value,
+                    description=description,
+                    approved=False
+                )
+            except Exception as le:
+                logger.error(f"Failed to log permission timeout: {le}")
+                
             return False
         finally:
             self._pending.pop(request.id, None)
