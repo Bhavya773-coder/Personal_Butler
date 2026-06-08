@@ -404,7 +404,7 @@ class TaskPlanner:
             action_id = await audit_log.log_action(self.session_id, "tool", "filesystem_action", details={"message": message})
             try:
                 # 1. Create Folder
-                if "create" in msg_lower and "folder" in msg_lower:
+                if "create" in msg_lower and ("folder" in msg_lower or "directory" in msg_lower or "make folder" in msg_lower or "make directory" in msg_lower):
                     folder_info = self._extract_folder_info(message)
                     path = folder_info.get("path", "")
 
@@ -413,20 +413,21 @@ class TaskPlanner:
                         await audit_log.update_action(action_id, status="failed", result=res_str)
                         return res_str
 
-                    # Safe path validation
-                    target_path = Path(path).resolve()
+                    # Safe path check
+                    try:
+                        from tools.filesystem import resolve_path, resolve_known_folder
+                        target_path = resolve_path(path)
+                    except FileNotFoundError as e:
+                        res_str = str(e)
+                        await audit_log.update_action(action_id, status="failed", result=res_str)
+                        return res_str
+
                     if target_path.drive and target_path == Path(target_path.drive).resolve():
                         res_str = "Modifying the root directory of a drive is blocked for safety."
                         await audit_log.update_action(action_id, status="failed", result=res_str)
                         return res_str
 
                     # Request permission
-                    await self._emit("permission_required", {
-                        "action": "create_folder",
-                        "description": f"Create folder: {path}",
-                        "level": "confirm",
-                        "details": {"path": path}
-                    })
                     approved = await permission_engine.request_permission(
                         "create_folder", f"Create folder: {path}", {"path": path}
                     )
@@ -440,134 +441,182 @@ class TaskPlanner:
                     result = filesystem.create_folder(path)
                     await self._emit("tool_done", {"tool": "create_folder", "result": str(result)})
 
-                    if result.get("success"):
-                        response_str = f"Created folder: {result['path']}"
-                        await audit_log.update_action(action_id, status="completed", result=response_str)
-                        return response_str
-                    else:
-                        err_str = result.get("error", "Failed to create folder.")
-                        await audit_log.update_action(action_id, status="failed", result=err_str)
-                        return err_str
+                    res_str = result.get("message", "Failed to create folder.")
+                    status = "completed" if result.get("success") else "failed"
+                    
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "count": result.get("count", 0),
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "permission_status": "approved",
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
 
-                # 2. Search Files (Find files named X or Search Downloads for PDF files)
-                elif ("search" in msg_lower or "find" in msg_lower) and ("file" in msg_lower or "pdf" in msg_lower or "document" in msg_lower or "invoice" in msg_lower):
+                # 2. Search Files
+                elif ("search" in msg_lower or "find" in msg_lower) and any(w in msg_lower for w in [
+                    "file", "pdf", "document", "invoice", "excel", "word", "image", "photo", "video", "text", "markdown"
+                ]):
                     search_info = self._extract_file_search(message)
                     search_path = search_info["path"]
                     pattern = search_info["pattern"]
-
-                    target_path = Path(search_path).resolve()
-                    if target_path.drive and target_path == Path(target_path.drive).resolve():
-                        res_str = "Searching the root directory of a drive is blocked for safety."
-                        await audit_log.update_action(action_id, status="failed", result=res_str)
+                    
+                    recursive = any(w in msg_lower for w in ["recursive", "recursively", "all subfolders", "subdirectories"])
+                    
+                    approved = True
+                    if recursive:
+                        approved = await permission_engine.request_permission(
+                            "search_files", f"Recursive search in {search_path} for {pattern}", {"path": search_path, "pattern": pattern, "recursive": True}
+                        )
+                        
+                    if not approved:
+                        res_str = "Search cancelled."
+                        await audit_log.update_action(action_id, status="cancelled", result=res_str)
                         return res_str
 
                     await self._emit("tool_started", {"tool": "search_files", "message": f"Searching {search_path} for {pattern}..."})
-                    result = filesystem.search_files(search_path, pattern)
+                    result = filesystem.search_files(search_path, pattern, recursive=recursive, confirmed=True)
                     await self._emit("tool_done", {"tool": "search_files", "result": f"{result.get('count', 0)} files found"})
 
-                    if result.get("error"):
-                        await audit_log.update_action(action_id, status="failed", result=result["error"])
-                        return result["error"]
-
-                    count = result.get("count", 0)
-                    if count == 0:
-                        if "pdf" in msg_lower or ".pdf" in pattern.lower():
-                            response_str = "No PDFs found."
-                        else:
-                            response_str = "No matching files found."
-                        await audit_log.update_action(action_id, status="completed", result=response_str)
-                        return response_str
-
-                    file_list = "\n".join([f"  • {r['name']} ({r.get('size', 0)} bytes)" for r in result.get("results", [])[:20]])
-                    response_str = f"Found {count} file(s) matching '{pattern}' in {search_path}:\n{file_list}"
-                    await audit_log.update_action(action_id, status="completed", result=response_str)
-                    return response_str
+                    res_str = result.get("message", "Search failed.")
+                    status = "completed" if result.get("success") else "failed"
+                    
+                    if result.get("success") and result.get("count", 0) > 0:
+                        file_list = "\n".join([f"  • {r['name']} ({r.get('size', 0)} bytes)" for r in result.get("items", [])[:20]])
+                        res_str = f"Found {result['count']} file(s) matching '{pattern}' in {result['target']}:\n{file_list}"
+                    elif result.get("success"):
+                        res_str = "No matching files found."
+                        
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "count": result.get("count", 0),
+                        "items": [item.get("name") for item in result.get("items", [])],
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "permission_status": "approved" if recursive else "safe",
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
 
                 # 3. List Files
                 elif "list" in msg_lower or "show" in msg_lower:
                     path = self._extract_path(message)
                     if not path:
-                        if "download" in msg_lower:
-                            path = str(Path.home() / "Downloads")
-                        elif "document" in msg_lower:
-                            path = str(Path.home() / "Documents")
+                        if "downloads" in msg_lower or "download" in msg_lower:
+                            path = "Downloads"
+                        elif "documents" in msg_lower or "document" in msg_lower:
+                            path = "Documents"
                         else:
-                            path = str(Path.home() / "Desktop")
-
-                    target_path = Path(path).resolve()
-                    if target_path.drive and target_path == Path(target_path.drive).resolve():
-                        res_str = "Listing the root directory of a drive is blocked for safety."
-                        await audit_log.update_action(action_id, status="failed", result=res_str)
-                        return res_str
+                            path = "Desktop"
 
                     await self._emit("tool_started", {"tool": "list_folders", "message": f"Listing {path}..."})
                     result = filesystem.list_folders(path)
                     await self._emit("tool_done", {"tool": "list_folders", "result": f"{result.get('count', 0)} items"})
 
-                    if result.get("error"):
-                        await audit_log.update_action(action_id, status="failed", result=result["error"])
-                        return result["error"]
+                    res_str = result.get("message", "Failed to list folder.")
+                    status = "completed" if result.get("success") else "failed"
+                    
+                    if result.get("success") and result.get("count", 0) > 0:
+                        items = result.get("items", [])
+                        listing = "\n".join([f"  {'📁' if i['is_dir'] else '📄'} {i['name']}" for i in items[:20]])
+                        res_str = f"Contents of {result['target']} ({result['count']} items):\n{listing}"
+                    elif result.get("success"):
+                        res_str = f"Folder is empty: {result['target']}"
+                        
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "count": result.get("count", 0),
+                        "items": [item.get("name") for item in result.get("items", [])],
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "permission_status": "safe",
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
 
-                    items = result.get("items", [])
-                    listing = "\n".join([f"  {'📁' if i['is_dir'] else '📄'} {i['name']}" for i in items[:30]])
-                    response_str = f"Contents of {path} ({result['count']} items):\n{listing}"
-                    await audit_log.update_action(action_id, status="completed", result=response_str)
-                    return response_str
-
-                # 4. Read File
-                elif "read" in msg_lower:
+                # 4. Read File / Summarize File
+                elif "read" in msg_lower or "summarize" in msg_lower:
                     path = self._extract_path(message)
                     if not path:
                         res_str = "Which file should I read? Please specify a path."
                         await audit_log.update_action(action_id, status="failed", result=res_str)
                         return res_str
 
-                    target_path = Path(path).resolve()
-                    if target_path.drive and target_path == Path(target_path.drive).resolve():
-                        res_str = "Reading the root directory of a drive is blocked for safety."
-                        await audit_log.update_action(action_id, status="failed", result=res_str)
-                        return res_str
-
-                    await self._emit("tool_started", {"tool": "read_text_file", "message": f"Reading {path}..."})
+                    tool_name = "read_text_file"
                     if path.lower().endswith(".pdf"):
+                        tool_name = "read_pdf"
+                        
+                    await self._emit("tool_started", {"tool": tool_name, "message": f"Reading {path}..."})
+                    if tool_name == "read_pdf":
                         result = filesystem.read_pdf(path)
                     else:
                         result = filesystem.read_text_file(path)
-                    await self._emit("tool_done", {"tool": "read_file", "result": "File read complete."})
+                    await self._emit("tool_done", {"tool": tool_name, "result": "File read complete."})
 
-                    if result.get("error"):
-                        await audit_log.update_action(action_id, status="failed", result=result["error"])
-                        return result["error"]
-
-                    content = result.get("content", "")
-                    if not content and "pages" in result:
-                        content = "\n\n".join([p["text"] for p in result["pages"]])
-
-                    response_str = f"Contents of {path}:\n{content[:3000]}"
-                    await audit_log.update_action(action_id, status="completed", result=response_str)
-                    return response_str
+                    res_str = result.get("message", "Failed to read file.")
+                    status = "completed" if result.get("success") else "failed"
+                    
+                    content = ""
+                    if result.get("success"):
+                        content = result.get("content", "")
+                        if "summarize" in msg_lower:
+                            status_ollama = await check_ollama_status()
+                            if status_ollama["running"] and status_ollama["model_available"]:
+                                await self._emit("tool_started", {"tool": "summarize_file", "message": f"Summarizing file {Path(path).name}..."})
+                                summary = await self._summarize(f"Summarize the file: '{Path(path).name}'", content)
+                                await self._emit("tool_done", {"tool": "summarize_file", "result": "Summary complete."})
+                                res_str = f"Summary of {Path(path).name}:\n{summary}"
+                            else:
+                                preview = content[:300] + "..." if len(content) > 300 else content
+                                res_str = f"Ollama is unavailable. Here is a preview of the file '{Path(path).name}':\n\n{preview}"
+                        else:
+                            preview = content[:3000]
+                            if len(content) > 3000:
+                                preview += "\n... [truncated]"
+                            res_str = f"Contents of {Path(path).name}:\n{preview}"
+                            
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "count": len(content) if result.get("success") else 0,
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "permission_status": "safe",
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
 
                 # 5. Delete File
                 elif "delete" in msg_lower or "remove" in msg_lower:
                     path = self._extract_path(message)
                     if not path:
+                        folder_info = self._extract_folder_info(message)
+                        path = folder_info.get("path", "")
+                        if not path and "jarvis test" in msg_lower:
+                            try:
+                                from tools.filesystem import resolve_known_folder
+                                path = str(resolve_known_folder("desktop") / "Jarvis Test")
+                            except FileNotFoundError:
+                                path = ""
+                                
+                    if not path:
                         res_str = "Which file or folder should I delete? Please specify a path."
                         await audit_log.update_action(action_id, status="failed", result=res_str)
                         return res_str
 
-                    target_path = Path(path).resolve()
-                    if target_path.drive and target_path == Path(target_path.drive).resolve():
-                        res_str = "Modifying the root directory of a drive is blocked for safety."
-                        await audit_log.update_action(action_id, status="failed", result=res_str)
-                        return res_str
-
                     # Request permission (Dangerous level!)
-                    await self._emit("permission_required", {
-                        "action": "delete_file",
-                        "description": f"Delete file or folder: {path}",
-                        "level": "dangerous",
-                        "details": {"path": path}
-                    })
                     approved = await permission_engine.request_permission(
                         "delete_file", f"Delete file or folder: {path}", {"path": path}
                     )
@@ -581,14 +630,20 @@ class TaskPlanner:
                     result = filesystem.delete_file(path, confirmed=True)
                     await self._emit("tool_done", {"tool": "delete_file", "result": str(result)})
 
-                    if result.get("success"):
-                        response_str = f"Successfully deleted: {path}"
-                        await audit_log.update_action(action_id, status="completed", result=response_str)
-                        return response_str
-                    else:
-                        err_str = result.get("error", "Failed to delete.")
-                        await audit_log.update_action(action_id, status="failed", result=err_str)
-                        return err_str
+                    res_str = result.get("message", "Delete failed.")
+                    status = "completed" if result.get("success") else "failed"
+                    
+                    log_details = {
+                        "command": message,
+                        "action": result.get("action"),
+                        "target": result.get("target"),
+                        "success": result.get("success"),
+                        "verified": result.get("verified"),
+                        "permission_status": "approved",
+                        "error": result.get("error")
+                    }
+                    await audit_log.update_action(action_id, status=status, result=res_str, details=log_details)
+                    return res_str
                 else:
                     return await self._handle_chat(message)
             except Exception as fe:

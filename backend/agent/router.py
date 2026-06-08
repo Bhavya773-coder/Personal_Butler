@@ -32,7 +32,11 @@ KEYWORD_PATTERNS: dict[str, list[str]] = {
         "find pdf", "find document", "open folder", "list folder",
         "what files", "show files", "search my", "downloads folder",
         "desktop folder", "documents folder", "find files named", "read this",
-        "list files in",
+        "list files in", "show downloads", "list downloads", "list desktop", 
+        "list documents", "search downloads for pdf", "find pdf files in downloads",
+        "find invoice on desktop", "search desktop for invoice", "find excel files in documents",
+        "read this file", "summarize this file", "read pdf", "read text file",
+        "read markdown file", "create directory", "make directory"
     ],
     "pc_control": [
         "open notepad", "open calculator", "open calc", "open paint",
@@ -68,19 +72,20 @@ def quick_classify(message: str) -> str | None:
     if msg_lower in STOP_WORDS or msg_lower.startswith("stop"):
         return "interrupt"
 
+    best_category = None
+    longest_match_len = 0
+
     # Check keyword patterns
-    scores: dict[str, int] = {}
     for category, patterns in KEYWORD_PATTERNS.items():
         for pattern in patterns:
             if pattern in msg_lower:
-                scores[category] = scores.get(category, 0) + 1
+                if len(pattern) > longest_match_len:
+                    longest_match_len = len(pattern)
+                    best_category = category
 
-    if scores:
-        # Return the category with the highest score
-        best = max(scores, key=scores.get)  # type: ignore
-        if scores[best] >= 1:
-            logger.info(f"Quick classify: '{message[:50]}' → {best} (score: {scores[best]})")
-            return best
+    if best_category:
+        logger.info(f"Quick classify: '{message[:50]}' → {best_category} (longest pattern: {longest_match_len})")
+        return best_category
 
     return None
 

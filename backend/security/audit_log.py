@@ -107,14 +107,20 @@ class AuditLog:
         await self._db.commit()
         return cursor.lastrowid or -1
 
-    async def update_action(self, action_id: int, status: str, result: str | None = None):
-        """Update an action's status and result."""
+    async def update_action(self, action_id: int, status: str, result: str | None = None, details: dict | None = None):
+        """Update an action's status, result, and optional details."""
         if not self._db or action_id < 0:
             return
-        await self._db.execute(
-            "UPDATE actions SET status = ?, result = ? WHERE id = ?",
-            (status, result, action_id),
-        )
+        if details:
+            await self._db.execute(
+                "UPDATE actions SET status = ?, result = ?, details = ? WHERE id = ?",
+                (status, result, json.dumps(details), action_id),
+            )
+        else:
+            await self._db.execute(
+                "UPDATE actions SET status = ?, result = ? WHERE id = ?",
+                (status, result, action_id),
+            )
         await self._db.commit()
 
     async def log_permission(

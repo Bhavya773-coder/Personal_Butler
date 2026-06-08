@@ -184,6 +184,8 @@ async def speak_text(text: str):
     _tts_stop = False
 
     engine = os.getenv("TTS_ENGINE", "edge-tts")
+    if engine.lower() == "none":
+        return
 
     # Split into sentences for interruptible TTS
     import re
