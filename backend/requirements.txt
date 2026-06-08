@@ -1,0 +1,33 @@
+# JARVIS Core Backend Dependencies
+
+# Web Framework
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+websockets==12.0
+
+# HTTP Client (for Ollama)
+httpx==0.27.0
+
+# Database
+aiosqlite==0.20.0
+
+# Environment
+python-dotenv==1.0.1
+
+# TTS
+pyttsx3==2.90
+edge-tts==6.1.12
+
+# Browser Automation
+playwright==1.44.0
+
+# PC Control
+pyautogui==0.9.54
+psutil==5.9.8
+Pillow==10.3.0
+
+# PDF Reading
+PyPDF2==3.0.1
+
+# CORS
+pydantic==2.7.4

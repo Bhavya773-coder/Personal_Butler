@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Build outputs
+dist/
+dist-electron/
+build/
+
+# Environment
+.env
+
+# Database
+backend/data/*.sqlite
+backend/data/*.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Temp
+*.tmp
+*.temp
