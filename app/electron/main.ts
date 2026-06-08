@@ -1,9 +1,6 @@
 import { app, BrowserWindow, globalShortcut, ipcMain } from 'electron'
 import path from 'path'
 
-// Handle creating/removing shortcuts on Windows when installing/uninstalling
-if (require('electron-squirrel-startup')) app.quit()
-
 let mainWindow: BrowserWindow | null = null
 
 function createWindow() {
@@ -14,7 +11,7 @@ function createWindow() {
     minHeight: 600,
     title: 'JARVIS Core',
     backgroundColor: '#0a0a0f',
-    icon: path.join(__dirname, '../public/icon.png'),
+    // icon: path.join(__dirname, '../public/icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

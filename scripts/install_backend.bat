@@ -26,9 +26,10 @@ if errorlevel 1 (
 
 echo.
 echo [3/3] Installing Playwright browsers...
-playwright install chromium
+python -m playwright install chromium
 if errorlevel 1 (
-    echo WARNING: Playwright browser install failed. Run manually: playwright install chromium
+    echo WARNING: Playwright browser install failed. Run manually:
+    echo   python -m playwright install chromium
 )
 
 echo.

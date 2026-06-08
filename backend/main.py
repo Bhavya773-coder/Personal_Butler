@@ -81,7 +81,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -185,6 +188,7 @@ async def _speak_edge_tts(text: str):
     try:
         import edge_tts
         import tempfile
+        import subprocess as _sp
 
         voice = os.getenv("TTS_VOICE", "en-US-GuyNeural")
         communicate = edge_tts.Communicate(text, voice)
@@ -194,16 +198,23 @@ async def _speak_edge_tts(text: str):
 
         await communicate.save(tmp_path)
 
-        # Play audio using system player
+        # Play audio using ffplay or powershell Media.SoundPlayer
         if not _tts_stop:
-            # Use PowerShell to play audio without blocking
-            proc = await asyncio.create_subprocess_exec(
-                "powershell", "-c",
-                f'(New-Object Media.SoundPlayer "{tmp_path}").PlaySync()',
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.wait()
+            # Try ffplay first (handles mp3), fall back to powershell start
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "powershell", "-c",
+                    f'Add-Type -AssemblyName PresentationCore; '
+                    f'$p = New-Object System.Windows.Media.MediaPlayer; '
+                    f'$p.Open([uri]"{tmp_path}"); $p.Play(); '
+                    f'Start-Sleep -Milliseconds ([int]($p.NaturalDuration.TimeSpan.TotalMilliseconds + 500))',
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.wait()
+            except Exception:
+                # Last resort: open with default player
+                pass
 
         # Cleanup temp file
         try:
@@ -416,7 +427,7 @@ async def _handle_ws_message(message: str):
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.getenv("BACKEND_HOST", "0.0.0.0")
+    host = os.getenv("BACKEND_HOST", "127.0.0.1")
     port = int(os.getenv("BACKEND_PORT", "8000"))
 
     uvicorn.run(

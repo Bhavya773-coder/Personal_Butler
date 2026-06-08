@@ -28,7 +28,7 @@ export interface JarvisEvent {
 
 type EventCallback = (event: JarvisEvent) => void
 
-const WS_URL = 'ws://localhost:8000/ws/events'
+const WS_URL = 'ws://127.0.0.1:8000/ws/events'
 const MAX_RECONNECT_DELAY = 10000
 const INITIAL_RECONNECT_DELAY = 1000
 

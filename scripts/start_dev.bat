@@ -35,9 +35,9 @@ echo ============================================
 echo  JARVIS Core is starting!
 echo ============================================
 echo.
-echo  Backend: http://localhost:8000
-echo  Frontend: http://localhost:5173
-echo  Health: http://localhost:8000/health
+echo  Backend:  http://127.0.0.1:8000
+echo  Frontend: http://127.0.0.1:5173
+echo  Health:   http://127.0.0.1:8000/health
 echo.
 echo  Press Ctrl+C in each window to stop.
 echo ============================================
